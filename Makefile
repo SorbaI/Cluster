@@ -35,8 +35,8 @@ CLIBFLAGS = -fpic -shared
 # NOTE: invoke with "DEBUG=1 make" or "make DEBUG=1".
 ifeq ($(DEBUG),1)
 	# Add default symbols:
-	CFLAGS += -g -DEBUGTEST -fsanitize=address,leak,undefined
-	CLIBFLAGS += -g -DEBUGTEST -fsanitize=address,leak,undefined
+	CFLAGS += -g -DDEBUGTEST -fsanitize=address,leak,undefined
+	CLIBFLAGS += -g -DDEBUGTEST -fsanitize=address,leak,undefined
 else
 	# Enable link-time optimization:
 	CFLAGS  += -flto
