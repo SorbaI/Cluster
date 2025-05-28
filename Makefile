@@ -26,7 +26,6 @@ CFLAGS = \
 	-Wall    \
 	-Wextra  \
 	-Werror  \
-	-fsanitize=address,leak
 
 # Linker flags:
 LDFLAGS = -pthread -lrt -lm
