@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-#define NUM_TASKS 8
+#define NUM_TASKS  96 // 8 * 12
 #define LEFT -10000
 #define RIGHT 20
 #define PRECISION 0.000000001

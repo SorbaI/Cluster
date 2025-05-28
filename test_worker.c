@@ -21,7 +21,7 @@ void * calculate_integral(void *buf) {
     double res = 0;
     double left = task->left;
     for (long long i = 0; i < task->num_steps; ++i) {
-        res += exp(left + task->step/2) * task->step;
+        res += left + task->step;
         left += task->step;
     }
     return format_ans(sizeof(res),(void *)&res);
