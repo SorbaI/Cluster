@@ -60,7 +60,7 @@ RESET   = \033[0m
 
 test : test_manager test_worker
 	@echo "Запуск тестов..."
-	@./build/test_manager 127.0.0.1 1227 1 1 2>/dev/null &
+	@./build/test_manager 127.0.0.1 1227 20 1 2>/dev/null &
 	@time ./build/test_worker 127.0.0.1 1227 $(CORES)
 	@echo "Тесты завершены!"
 

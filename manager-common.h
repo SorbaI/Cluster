@@ -162,6 +162,28 @@ static bool manager_accept_connection_request(INFO_MANAGER* manager, WORK_CONNEC
         fprintf(stderr, "[manager_accept_connection_request] Unable to disable TCP_CORK socket option");
         return false;
     }
+    // TCP Keep-Alive
+    setsockopt_arg = 1;
+    if(setsockopt(conn->client_sock_fd, SOL_SOCKET, SO_KEEPALIVE, &setsockopt_arg, sizeof(setsockopt_arg)) == -1) {
+        fprintf(stderr, "[manager_accept_connection_request] Unable to enable TCP Keep-Alive socket option");
+        return false;
+    }
+    // TCP KeepIdle
+    setsockopt_arg = 5;
+    if(setsockopt(conn->client_sock_fd, IPPROTO_TCP, TCP_KEEPIDLE, &setsockopt_arg, sizeof(setsockopt_arg)) == -1) {
+        fprintf(stderr, "[manager_accept_connection_request] Unable to enable TCP KeepIdle socket option");
+        return false;
+    }
+    setsockopt_arg = 1;
+    if(setsockopt(conn->client_sock_fd, IPPROTO_TCP, TCP_KEEPINTVL, &setsockopt_arg, sizeof(setsockopt_arg)) == -1) {
+        fprintf(stderr, "[manager_accept_connection_request] Unable to enable TCP KeepINTVL socket option");
+        return false;
+    }
+    setsockopt_arg = 3;
+    if(setsockopt(conn->client_sock_fd, IPPROTO_TCP, TCP_KEEPCNT, &setsockopt_arg, sizeof(setsockopt_arg)) == -1) {
+        fprintf(stderr, "[manager_accept_connection_request] Unable to enable TCP TCP_KEEPCNT socket option");
+        return false;
+    }
 
     DEBUG("Worker connected\n");
     conn->state = GET_INFO;
@@ -170,7 +192,7 @@ static bool manager_accept_connection_request(INFO_MANAGER* manager, WORK_CONNEC
 
 static bool manager_get_worker_info(WORK_CONNECTION *work)
 {
-    size_t bytes_read = recv(work->client_sock_fd, &(work->n_cores), sizeof(work->n_cores), MSG_WAITALL);
+    size_t bytes_read = recv(work->client_sock_fd, &(work->n_cores), sizeof(work->n_cores), 0);
     if (bytes_read != sizeof(work->n_cores))
     {
         fprintf(stderr, "Unable to recv n_cores info from worker\n");
@@ -221,17 +243,24 @@ static size_t manager_send_tasks(WORK_CONNECTION *work, size_t num_tasks, char *
 static bool manager_get_worker_ans(WORK_CONNECTION *work, char **ans) {
     for(size_t num_ans = 0; num_ans < work->num_last_tasks_send; ++num_ans){
         size_t ans_size = 0;
-        size_t bytes_read = recv(work->client_sock_fd, &ans_size, sizeof(ans_size), MSG_WAITALL);
+        size_t bytes_read = recv(work->client_sock_fd, &ans_size, sizeof(ans_size), 0);
         if (bytes_read != sizeof(ans_size))
         {
             fprintf(stderr, "can't get size: get %lu bytes from worker, expected %ld\n",bytes_read, sizeof(ans_size));
             return false;
         }
         bytes_read = recv(work->client_sock_fd, *ans, ans_size, MSG_WAITALL);
-        if (bytes_read != ans_size)
-        {
+        if(bytes_read == 0) {
             fprintf(stderr, "Get %lu bytes from worker, expected %lu\n",bytes_read, ans_size);
             return false;
+        }
+        while (bytes_read != ans_size)
+        {
+            size_t new_bytes_read = recv(work->client_sock_fd, *ans + bytes_read, ans_size - bytes_read, 0);
+            if (new_bytes_read == 0){
+                fprintf(stderr, "Get %lu bytes from worker, expected %lu\n",bytes_read, ans_size);
+                return false;
+            }
         }
         DEBUG("Get Ans from worker - size: %lu\n",ans_size);
         *ans = *ans + bytes_read;

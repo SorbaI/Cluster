@@ -28,7 +28,7 @@ static void poll_manager_wait_for_answer(struct pollfd* pollfds, size_t conn_i, 
     struct pollfd* pollfd = &pollfds[1 + conn_i];
 
     pollfd->fd      = work->client_sock_fd;
-    pollfd->events  = POLLIN | POLLHUP;
+    pollfd->events  = POLLIN | POLLHUP | POLLERR;
     pollfd->revents = 0U;
 }
 
@@ -44,7 +44,7 @@ static void poll_manager_wait_work_info(struct pollfd* pollfds, size_t conn_i, W
     struct pollfd* pollfd = &pollfds[1 + conn_i];
 
     pollfd->fd      = work->client_sock_fd;
-    pollfd->events  = POLLIN|POLLHUP;
+    pollfd->events  = POLLIN|POLLHUP|POLLERR;
     pollfd->revents = 0U;
 }
 
@@ -77,7 +77,7 @@ static bool wait_and_get_info_workers(INFO_MANAGER* manager, WORK_CONNECTION *wo
 
         for (size_t conn_i = 0U; conn_i < num_connected_workers; ++conn_i)
         {
-            if (pollfds[1U + conn_i].revents & POLLHUP)
+            if (pollfds[1U + conn_i].revents & (POLLHUP | POLLERR))
             {  
                 fprintf(stderr, "Unexpected POLLHUP\n");
                 goto error;
@@ -142,7 +142,6 @@ int start_manager(INFO_MANAGER *manager, size_t num_tasks, char tasks[], char *a
     if (!manager_close_listen_socket(manager)) {
         goto error_close;
     }
-
     time_t start_time = time(NULL);
     size_t num_tasks_send = 0;
     size_t num_ans_get = 0;
@@ -166,16 +165,22 @@ int start_manager(INFO_MANAGER *manager, size_t num_tasks, char tasks[], char *a
         ptr_tasks += byte_send;
     }
     while(num_ans_get != num_tasks) {
-        time_t max_wait_time = time(NULL) - start_time + manager->max_time;
-        int pollret = poll(pollfds, 1U + manager->num_nodes, max_wait_time);
+        time_t max_wait_time = start_time - time(NULL) + manager->max_time + 1;
+        if (max_wait_time <= 0) {
+            fprintf(stderr, "Time out!\n");
+            goto error_close;
+        }
+        DEBUG("Start poll with %ld sec\n",max_wait_time);
+        int pollret = poll(pollfds, 1U + manager->num_nodes, max_wait_time * 1000);
         if (pollret == -1)
         {
             fprintf(stderr, "Unable to poll-wait for data on descriptors!\n");
             goto error_close;
         }
+        DEBUG("End poll, pollret:%d!\n",pollret);
         for (size_t conn_i = 0U; conn_i < manager->num_nodes; ++conn_i)
         {
-            if (pollfds[1U + conn_i].revents & POLLHUP)
+            if (pollfds[1U + conn_i].revents & (POLLHUP | POLLERR))
             {  
                 fprintf(stderr, "Unexpected POLLHUP\n");
                 goto error_close;

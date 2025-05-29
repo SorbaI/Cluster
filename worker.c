@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <time.h>
 #include <sched.h>
+#include <netinet/tcp.h>
 #include "worker.h"
 
 //==================
@@ -31,6 +32,38 @@ static bool worker_connect_to_manager(INFO_WORKER* worker)
     {
         return false;
     }
+    // TCP KEEP ALIVE
+    int setsockopt_arg  = 1;
+    if(setsockopt(worker->server_conn_fd, SOL_SOCKET, SO_KEEPALIVE, &setsockopt_arg, sizeof(setsockopt_arg)) == -1) {
+        fprintf(stderr, "[manager_accept_connection_request] Unable to enable TCP Keep-Alive socket option");
+        return false;
+    }
+    // TCP KeepIdle
+    setsockopt_arg = 5;
+    if(setsockopt(worker->server_conn_fd, IPPROTO_TCP, TCP_KEEPIDLE, &setsockopt_arg, sizeof(setsockopt_arg)) == -1) {
+        fprintf(stderr, "[manager_accept_connection_request] Unable to enable TCP KeepIdle socket option");
+        return false;
+    }
+    setsockopt_arg = 1;
+    if(setsockopt(worker->server_conn_fd, IPPROTO_TCP, TCP_KEEPINTVL, &setsockopt_arg, sizeof(setsockopt_arg)) == -1) {
+        fprintf(stderr, "[manager_accept_connection_request] Unable to enable TCP KeepINTVL socket option");
+        return false;
+    }
+    setsockopt_arg = 3;
+    if(setsockopt(worker->server_conn_fd, IPPROTO_TCP, TCP_KEEPCNT, &setsockopt_arg, sizeof(setsockopt_arg)) == -1) {
+        fprintf(stderr, "[manager_accept_connection_request] Unable to enable TCP TCP_KEEPCNT socket option");
+        return false;
+    }
+
+    struct timeval tv;
+    tv.tv_sec = 5; 
+    tv.tv_usec = 0;
+    
+    if (setsockopt(worker->server_conn_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv) < 0) {
+        fprintf(stderr,"[get_tasks] setsockopt (SO_RCVTIMEO) failed");
+        return false;
+    }
+
     return true;
 }
 
@@ -51,23 +84,39 @@ static bool worker_close_socket(INFO_WORKER* worker)
 
 static size_t get_tasks(INFO_WORKER* worker, char **tasks_ans)
 {
+    int sock = worker->server_conn_fd; 
+
     size_t num_of_tasks = 0;
-    size_t bytes_read = recv(worker->server_conn_fd, &num_of_tasks, sizeof(num_of_tasks), MSG_WAITALL);
-    if (bytes_read != sizeof(num_of_tasks))
-    {
-        fprintf(stderr, "Unable to recv num_of_tasks from server\n");
+    ssize_t bytes_read = recv(sock, &num_of_tasks, sizeof(num_of_tasks), 0);
+
+    if (bytes_read == -1) {
+        perror("[get_tasks] Unable to recv num_of_tasks from server");
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            fprintf(stderr, "[get_tasks] Recv timed out while receiving num_of_tasks.\n");
+        }
+        return 0;
+    } else if (bytes_read != sizeof(num_of_tasks)) {
+        fprintf(stderr, "[get_tasks] Unable to recv num_of_tasks from server: bytes_read = %zu, expected %zu\n",
+                bytes_read, sizeof(num_of_tasks));
         return 0;
     }
-    // Сервер отключился
+
     if (num_of_tasks == 0) {
+        DEBUG("Server Disconnect!\n");
         return 0;
     }
-    DEBUG("Worker get num_of_tasks : %lu\n",num_of_tasks);
-    size_t tasks_size = 0;
-    bytes_read = recv(worker->server_conn_fd, &tasks_size, sizeof(tasks_size), MSG_WAITALL);
-    if (bytes_read != sizeof(tasks_size))
-    {
-        fprintf(stderr, "Unable to recv tasks_size from server\n");
+    DEBUG("Worker get num_of_tasks : %lu\n", num_of_tasks);
+
+    ssize_t tasks_size = 0;
+    bytes_read = recv(sock, &tasks_size, sizeof(tasks_size), 0);
+    if (bytes_read == -1) {
+        perror("[get_tasks]: recv failed while receiving tasks_size!");
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            fprintf(stderr, "[get_tasks] Recv timed out while receiving tasks_size.\n");
+        }
+        return 0;
+    } else if(bytes_read != sizeof(tasks_size)) {
+        fprintf(stderr,"[get_tasks]: Соединение разорвано! bytes_read = %zu\n", bytes_read);
         return 0;
     }
     DEBUG("Worker get tasks_size : %lu\n", tasks_size);
@@ -76,12 +125,34 @@ static size_t get_tasks(INFO_WORKER* worker, char **tasks_ans)
         fprintf(stderr,"[get_tasks]: No memory for task!\n");
         return 0;
     }
-    bytes_read = recv(worker->server_conn_fd, tasks, tasks_size, MSG_WAITALL);
-    if (bytes_read != tasks_size)
-    {
-        fprintf(stderr, "Unable to recv tasks from server get:%lu want: %lu\n",
-                bytes_read, tasks_size);
+    bytes_read = recv(sock, tasks, tasks_size, 0);
+
+    if (bytes_read == -1) {
+        perror("[get_tasks] recv failed while receiving tasks!");
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            fprintf(stderr, "[get_tasks] Recv timed out while receiving tasks.\n");
+        }
+        free(tasks);
         return 0;
+    } else if (bytes_read == 0) {
+         fprintf(stderr,"[get_tasks]: Соединение разорвано!\n");
+        free(tasks);
+        return 0;
+    }
+    while (bytes_read < tasks_size)
+    {
+        ssize_t new_bytes_size = recv(sock, tasks + bytes_read, tasks_size - bytes_read, 0);
+        if (new_bytes_size == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+            }
+            free(tasks);
+            return 0;
+        }
+        bytes_read += new_bytes_size;
+    }
+    if (num_of_tasks == 0) {
+        DEBUG("[get_tasks] Server Disconnect!\n");
     }
     *tasks_ans = tasks;
     return num_of_tasks;
@@ -185,7 +256,7 @@ static size_t distributed_counting(INFO_WORKER *worker, char *tasks, size_t num_
         if (wait != 0) {
             fprintf(stderr, "Unable to join a thread\n");
             if(wait == ETIMEDOUT) {
-                fprintf(stderr, "ETIMEDOUT add 10 sec!!!\n");
+                fprintf(stderr, "ETIMEDOUT  - add 10 sec!!!\n");
                 worker->max_time += 10;
                 --i;
                 continue;
@@ -267,8 +338,7 @@ int worker_start(INFO_WORKER *worker) {
     while (!connected_to_server)
     {
         // Ожидаем, пока сервер проснётся.
-        sleep(1U);
-
+        sleep(1);
         DEBUG("Wait for server to start\n");
 
         connected_to_server = worker_connect_to_manager(worker);
